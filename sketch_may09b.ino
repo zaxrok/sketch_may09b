@@ -1,13 +1,14 @@
 /*
  * 
- * 0.2 대구 시연 6/7
+ * 0.2 대구 시연 6/7 버튼 클릭시 덴싱 모드/ 라인트레이스/ Obstacle avoidance/ wall follower
  * 0.1 교사연구회 시연 5/14
  */
 // for codestar mobile
 #include <IRremote.h>
 #include <Thread.h>
 #include <SoftwareSerial.h>
-#include <Adafruit_NeoPixel.h>
+#include <ThreadController.h>
+
 #ifdef __AVR__
   #include <avr/power.h>
 #endif
@@ -17,15 +18,15 @@
 #define RUN 2
 #define RESET 4
 #define START 5
-#define NEO
+//#define NEO
 // mobile
 #define FORWARD   0
 #define REVERSE   1
 #define MOTOR_L   0
 #define MOTOR_R   1
 
-const int pinLT1 = A1;  // IR 센서 1번(IN1) -- LEFT
-const int pinLT2 = A0;  // IR 센서 2번(IN2) -- RIGHT
+const int pinLT1 = 7;  // IR 센서 1번(IN1) -- LEFT
+const int pinLT2 = 8;  // IR 센서 2번(IN2) -- RIGHT
 const int pinButton = 12; // 푸시버튼 연결 핀 번호
 
 const int pinRGB_Red = 9;    // RGB LED의 Red 연결 핀 번호
@@ -34,6 +35,7 @@ const int pinRGB_Blue = 11;  // RGB LED의 Blue 연결 핀 번호
 const int pinWhite = 3;    
 
 #ifdef NEO
+  #include <Adafruit_NeoPixel.h>
   const int pinLedBar = 7;  // RGB LED Strip Bar, WS2812
   Adafruit_NeoPixel strip = Adafruit_NeoPixel(8, pinLedBar, NEO_GRB + NEO_KHZ800);
 #endif
@@ -63,7 +65,15 @@ int pinSpeedL = 5;
 
 // MOTOR_RIGHT
 int pinSpeedR = 6;
-int pinDirR = A5;
+int pinDirR = 3;
+
+// sonar
+const int pinEcho = A1;  // 초음파 센서 Echo 단자 연결 핀 번호
+const int pinTrig = 13;  // 초음파 센서 Trig 단자 연결 핀 번호
+int preDistance = 0;      // 초음파 -1 때문에
+
+// left ir or wall following
+const int pinLeftIR = A7;  
 
 // Healing mode
 bool bFadeColor = false;
@@ -86,6 +96,8 @@ int modeCount = 1;
 // remote
 #define LINE_TRACER     0
 #define REMOTE_CONTROL  1
+#define AVOIDENCE       2
+#define WALLFOLLOW      3
 
 const int pinRemocon = 4;
 IRrecv remocon(pinRemocon);
@@ -104,6 +116,16 @@ int RightTurn = 0;
 int Power = 200;
 float Power1Ratio = 1.0;
 float Power2Ratio = 1.0;
+
+/// obstacle avoid
+unsigned long msLastTick;
+boolean onlyOne   = false;
+boolean isAvoided = false;
+int     wheelSwitch = 0;
+boolean wheelTick = false;
+ThreadController controll = ThreadController();
+Thread worker1 = Thread();
+Thread worker2 = Thread(); 
 
 /*
 ff 55 len x  GET  sensor  port  slot  data a
@@ -257,6 +279,8 @@ void parseData(){
     break;
   }
 }
+
+#ifdef NEO
 void neoCallback(){
   int value = analogRead( pinMic );  // 소리 세기 읽기
   int lowLimit = 20, highLimit = 200;
@@ -269,6 +293,28 @@ void neoCallback(){
     strip.setPixelColor(i, strip.Color(random(0, 155),brightness,random(0, 155))); // Moderately bright green color.
   }
   strip.show(); // This sends the updated pixel color to the hardware.
+}
+#endif
+
+void callback1(){
+  if(DriveMode == AVOIDENCE && !isAvoided){
+    if(wheelTick){
+      if(++wheelSwitch % 2){
+        move(MOTOR_L, REVERSE, 100);
+        move(MOTOR_R, FORWARD, 100); 
+      }else{
+        move(MOTOR_L, FORWARD, 100);
+        move(MOTOR_R, REVERSE, 100); 
+      }
+    }else{
+      move(MOTOR_L, FORWARD, 100);
+      move(MOTOR_R, FORWARD, 100); 
+    }
+  }  
+}
+// led on/off
+void callback2(){ // for test
+  wheelTick = !wheelTick;
 }
 void setup() {
 
@@ -290,7 +336,8 @@ void setup() {
   
   pinMode(pinButton, INPUT); // 푸시버튼 핀을 입력용 핀으로 설정
   pinMode(pinBuzzer, OUTPUT); // 부저(스피커) 핀을 출력용 핀으로 설정
-  
+
+  pinMode(pinLeftIR, INPUT); // for wall following
   // put your setup code here, to run once:
   bt.begin( 9600 );  // 블루투스 통신 초기화 (속도= 9600 bps)
   //Serial.begin(9600);
@@ -325,12 +372,25 @@ void setup() {
 #ifdef NEO
   strip.begin();
   strip.show(); // Initialize all pixels to 'off'
+  
+  neoThread.onRun(neoCallback); 
+  neoThread.setInterval(20);
 #endif
 
-  neoThread.onRun(neoCallback);
-  neoThread.setInterval(20);
+// sonar
+  pinMode(pinTrig, OUTPUT); // 출력용 핀으로 설정
+  pinMode(pinEcho, INPUT);  // 입력용 핀으로 설정
 
-  
+  worker1.onRun(callback1);
+  worker1.setInterval(500);
+
+  worker2.onRun(callback2);
+  worker2.setInterval(2000);
+
+  controll.add(&worker1);
+  controll.add(&worker2);
+
+  msLastTick = millis();  
 }
 // test
 long interval = 1000;
@@ -379,8 +439,12 @@ void  Backward2( int power1, int power2 )
 }
 
 void loop() {
+
+#ifdef NEO
   if(neoThread.shouldRun())
     neoThread.run();
+#endif
+  controll.run();
   // put your main code here, to run repeatedly:
   currentTime = millis()/1000.0-lastTime;
   readSerial();
@@ -520,6 +584,38 @@ void loop() {
         RightTurn = 0;
     }
   }
+  else if(DriveMode == AVOIDENCE){
+    int distance = GetDistance();
+    if(distance < 7){
+      isAvoided = true;
+      move(MOTOR_L, REVERSE, 100);
+      move(MOTOR_R, REVERSE, 100);
+      unsigned long msTick = millis() - msLastTick;  
+      if(!onlyOne && msTick >= 2000){
+        msLastTick = millis();
+        onlyOne = true;
+        writeHead();
+        writeSerial(0xde);
+        writeSerial(2);
+        writeSerial(6);
+        writeEnd();
+      }
+    }
+    else {
+      isAvoided = false;
+      onlyOne = false;
+    }
+  }
+  else if(DriveMode == WALLFOLLOW){
+    int value = analogRead(pinLeftIR);  // 세기 읽기
+    if(value > 13){
+      move(MOTOR_L, FORWARD, 70);
+      move(MOTOR_R, FORWARD, 100);
+    }else{
+      move(MOTOR_L, FORWARD, 100);
+      move(MOTOR_R, FORWARD, 70);
+    }
+  }
   // read the state of the switch into a local variable:
   int reading = digitalRead(pinButton);
 
@@ -547,6 +643,12 @@ void loop() {
       }else{
         if(modeCount == 1){
           DriveMode = LINE_TRACER;
+        }else if(modeCount == 3){
+          DriveMode = AVOIDENCE;    
+          stop();      
+        }else if(modeCount == 4){
+          DriveMode = WALLFOLLOW;
+          stop();
         }else{
           DriveMode = REMOTE_CONTROL;
           stop();
@@ -557,7 +659,7 @@ void loop() {
         writeSerial(modeCount++);
         writeEnd();
         
-        if(modeCount > 3) modeCount = 1;
+        if(modeCount > 5) modeCount = 1;
       }
     }
   }
@@ -565,4 +667,19 @@ void loop() {
   // it'll be the lastButtonState:
   lastButtonState = reading;  
   
+}
+
+//////////////////////////////////// sonar function ////////////////////////////////////
+int  GetDistance(){
+  
+  digitalWrite( pinTrig, LOW ); 
+  delayMicroseconds( 2 );   
+  digitalWrite( pinTrig, HIGH );
+  delayMicroseconds( 10 );  
+  digitalWrite( pinTrig, LOW ); 
+  int  duration = pulseIn( pinEcho, HIGH );
+  int  distance = (duration / 2) / 29.1;   
+  if(distance < 0 ) distance = preDistance;
+  preDistance = distance;
+  return  distance;
 }
