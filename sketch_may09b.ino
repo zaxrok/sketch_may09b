@@ -8,6 +8,7 @@
 #include <Thread.h>
 #include <SoftwareSerial.h>
 #include <ThreadController.h>
+#include <Servo.h>
 
 #ifdef __AVR__
   #include <avr/power.h>
@@ -41,6 +42,13 @@ const int pinWhite = 3;
 #endif
 
 const int pinMic = A2;  // 마이크 연결 핀 번호
+// pen
+Servo myservo;  // create servo object to control a servo
+                // a maximum of eight servo objects can be created
+int pos = 0;    // variable to store the servo position
+const int pinPen = 7;
+int     penSwitch = 0;
+boolean penTick = false;
 
 Thread neoThread = Thread();
 // create bluetooth instnace
@@ -113,7 +121,7 @@ int RightTurn = 0;
 #define MAX_TURN_STEP5    30  //
 #define MAX_TURN_STEP6    33  //
 #define MAX_TURN_STEP7    35  // 정지 회전, (만약 초과시 원래 역회전)
-int Power = 200;
+int Power = 50;
 float Power1Ratio = 1.0;
 float Power2Ratio = 1.0;
 
@@ -126,6 +134,8 @@ boolean wheelTick = false;
 ThreadController controll = ThreadController();
 Thread worker1 = Thread();
 Thread worker2 = Thread(); 
+Thread worker3 = Thread();
+Thread worker4 = Thread();
 
 /*
 ff 55 len x  GET  sensor  port  slot  data a
@@ -316,6 +326,29 @@ void callback1(){
 void callback2(){ // for test
   wheelTick = !wheelTick;
 }
+void callback3(){
+  if(DriveMode == LINE_TRACER){
+    if(penTick){
+      if(++penSwitch % 2){
+        PenDown();
+      }else{
+        PenUp();
+      }
+    }else{
+      PenUp();
+    }
+  }  
+}
+// led on/off
+void callback4(){ // for test
+  penTick = !penTick;
+  if(penTick){
+      PenDown();
+    }else{
+      PenUp();
+    }
+}
+
 void setup() {
 
   // 3 color led
@@ -387,15 +420,45 @@ void setup() {
   worker2.onRun(callback2);
   worker2.setInterval(2000);
 
+  worker3.onRun(callback3);
+  worker3.setInterval(500);
+
+  worker4.onRun(callback4);
+  worker4.setInterval(2000);
+  
   controll.add(&worker1);
   controll.add(&worker2);
+  controll.add(&worker4);
 
   msLastTick = millis();  
+
+  myservo.attach(pinPen);  // attaches the servo on pin
+  PenUp();
+  
 }
 // test
 long interval = 1000;
 int motorState = LOW;
 long previousMillis = 0;
+
+
+void PenDown(){
+  for(pos = 90; pos >= 75; pos -= 1)
+  {
+    myservo.write(pos);
+    delay(2);
+  }
+  delay(100);
+}
+
+void PenUp(){
+  for(pos = 75; pos < 90; pos += 1)
+  {
+    myservo.write(pos);
+    delay(2);
+  }
+  delay(100);
+}
 
 void timerTest(){
   unsigned long currentMillis = millis();
